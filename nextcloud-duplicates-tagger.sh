@@ -1,18 +1,34 @@
 #!/bin/bash
-
-# By Georgiy Sitnikov.
-#
+##############################################################################################
+# LICENSE: GPL v3
 # AS-IS without any warranty
+#
+# Copyright 2020-2021 Georgiy Sitnikov
+# Copyright 2024 steadfasterX <steadfasterX | AT | gmail #DOT# com>
+#
+# source:
+# https://github.com/steadfasterX/nextcloud_scripts/blob/main/nextcloud-duplicates-tagger.sh
+#
+##############################################################################################
+# Searches for and tags duplicate files by the defined username
+##############################################################################################
 
-# Will search and tag all Duplicated files by user.
-
+# the tag name for duplicates
+# at least 1 file must be tagged in the user account (which is defined as user=xxx here)
 tagName=duplicate
 
+# nextcloud login
 NextcloudURL="https://yourFQDN/nextcloud"
-user="user"
-password="xxxxx-xxxxx-xxxxxx"
+user="nextcloud-user"
+password="xxxxx-xxxxx-xxxxxx"	# recommended: create a web app password
 
-# Log Level: none|Info
+# OPTIONAL: limit the search to a specific folder in nextcloud
+# e.g. "https://yourFQDN/nextcloud/apps/files/xxxxx?dir=/Smartphone/camerapics" becomes:
+# SUBPATH="Smartphone/camerapics"
+# leave outcommented if you want to scan all files
+#SUBPATH="nextcloud-URI-path"
+
+# Log Level: none|Info|Debug
 LogLvL=Info
 
 # Path to nextcloud
@@ -22,7 +38,7 @@ NextCloudPath=/var/www/nextcloud
 ### End of Config ###
 #####################
 
-LOCKFILE=/tmp/nextcloud-duplicates-tagger.tmp
+LOCKFILE=/tmp/nextcloud-duplicates-tagger_${user}.tmp
 
 # Check if config.php exist
 [[ -r "$NextCloudPath"/config/config.php ]] || { echo >&2 "[ERROR] config.php could not be read under "$NextCloudPath"/config/config.php. Please check the path and permissions"; exit 1; }
@@ -35,7 +51,7 @@ DataDirectory=$(grep datadirectory "$NextCloudPath"/config/config.php | cut -d "
 
 getFileID () {
 
-	fileid="$(curl -s -m 10 -u $user:$password ''$NextcloudURL'/remote.php/dav/files/'${user}'/'${fileToTag}'' \
+	fileid="$(curl -s -m 10 -u $user:$password ''$NextcloudURL'/remote.php/dav/files/'${user}'/'${SUBPATH}/${fileToTag}'' \
 -X PROPFIND --data '<?xml version="1.0" encoding="UTF-8"?>
  <d:propfind xmlns:d="DAV:">
    <d:prop xmlns:oc="http://owncloud.org/ns">
@@ -43,16 +59,17 @@ getFileID () {
    </d:prop>
  </d:propfind>' | xml_pp | grep "fileid" | sed -n 's/^.*<\(oc:fileid\)>\([^<]*\)<\/.*$/\2/p')"
 
-	[[ "$LogLvL" == "Info" ]] && { echo "[INFO] Searching Nextcloud Internal FileID for $fileToTag"; }
+	[[ "$LogLvL" == "Debug" ]] && { echo "[DEBUG] Searching Nextcloud Internal FileID for $fileToTag"; }
 
 	if [[ -z "$fileid" ]]; then
 
-		echo "[WARNING] File ID could not be found for a "$fileToTag" will skip it."
-		#exit 1
+		echo "[WARNING] File ID could not be found for >$fileToTag< will skip it."
+		return 1
 
 	else
 
-		[[ "$LogLvL" == "Info" ]] && { echo "[INFO] FileID is $fileid."; }
+		[[ "$LogLvL" == "Debug" ]] && { echo "[DEBUG] FileID is $fileid."; }
+		return
 
 	fi
 
@@ -88,20 +105,18 @@ getTag () {
 
 SetTag () {
 
-	curl -s -m 10 -u $user:$password ''$NextcloudURL'/remote.php/dav/systemtags-relations/files/'$fileid/$tagID \
--X PUT -H "Content-Type: application/json" \
---data '{"userVisible":true,\
-"userAssignable":true,\
-"canAssign":true,\
-"id":"'$tag'",\
-"name":"'$tagName'"}'
 	echo "[PROGRESS] Setting tag $tagName for $fileToTag."
+	curl -s -m 10 -u $user:$password "$NextcloudURL/remote.php/dav/systemtags-relations/files/$fileid/$tagID" \
+	  -X 'PUT' \
+	  -H 'content-type: application/json' \
+	  -H "origin: '$NextcloudURL'" \
+	  --data-raw '{"id":'$tag',"userVisible":true,"userAssignable":true,"canAssign":true,"name":"'$tagName'"}'
 
 }
 
 checkIfTagIsSet () {
 
-	if [[ -z "$fileid" ]]; then
+	if [[ ! -z "$fileid" ]]; then
 
 		getAllTags="$(curl -s -m 10 -u $user:$password ''$NextcloudURL'/remote.php/dav/systemtags-relations/files/'$fileid'' \
 -X PROPFIND --data '<?xml version="1.0" ?>
@@ -117,12 +132,13 @@ checkIfTagIsSet () {
 
 		if [[ ! -z "$getAllTags" ]]; then
 
-			[[ "$LogLvL" == "Info" ]] && { echo "[INFO] Tag $tagName is already set for $fileToTag, skipping."; }
+			[[ "$LogLvL" == "Debug" ]] && echo "[DEBUG] Tag $tagName is already set for $fileToTag, skipping."
+   			return
 
 		else
 
-			#echo "[INFO] Tag $tagName is not set"
-			SetTag
+			[[ "$LogLvL" == "Debug" ]] && echo "[DEBUG] Tag $tagName is not set"
+			SetTag && [[ "$LogLvL" == "Info" ]] && echo "[INFO] Tag $tagName has been set successfully"
 
 		fi
 
@@ -133,7 +149,7 @@ checkIfTagIsSet () {
 findDuplicates () {
 
 	echo "[PROGRESS] Searching for duplicates, this can take a long time..."
-	cd $DataDirectory/$user/files/
+	cd $DataDirectory/$user/files/$SUBPATH
 
 	find . ! -empty -type f -exec md5sum {} + | sort | uniq -w32 -dD >> $LOCKFILE
 	[[ "$LogLvL" == "Info" ]] && { echo "[INFO] Finally finished it is $(wc -l $LOCKFILE | awk '{print $1}') duplicates found"; }
@@ -208,12 +224,8 @@ while read line; do
 
 	fileToTag=$(fileToTagPath)
 
-	getFileID
-
-	checkIfTagIsSet
+	getFileID && checkIfTagIsSet
 
 done < $LOCKFILE
 
-#rm $LOCKFILE
-
-exit 0
+echo "Script ended with $?"

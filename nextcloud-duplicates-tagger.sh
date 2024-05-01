@@ -270,7 +270,7 @@ findDuplicates () {
 	cd $DataDirectory/$user/files/$SUBPATH
 
 	find . ! -empty -type f -exec md5sum {} + | sort | uniq -w32 -dD >> $LOCKFILE
-	[[ "$LogLvL" != "None" ]] && { echo "[INFO] Finally finished it is $(wc -l $LOCKFILE | awk '{print $1}') duplicates found"; }
+	[[ "$LogLvL" != "None" ]] && { echo "[INFO] Finally finished! Found $(wc -l $LOCKFILE | awk '{print $1}') duplicates."; }
 
 }
 
